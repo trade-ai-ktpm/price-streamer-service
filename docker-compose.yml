@@ -1,0 +1,17 @@
+services:
+  price-streamer:
+    build: .
+    container_name: price-streamer
+    environment:
+      REDIS_URL: redis://redis:6379
+      BINANCE_WS_BASE: wss://stream.binance.com:9443/ws
+      SYMBOLS: btcusdt,ethusdt,solusdt,bnbusdt,adausdt
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+networks:
+  backend-network:
+    external: true
+    name: backend-network

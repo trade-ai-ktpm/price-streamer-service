@@ -1,6 +1,6 @@
 import json
 import redis.asyncio as redis
-from app.config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB
 
 class RedisPublisher:
 
