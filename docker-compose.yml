@@ -3,11 +3,11 @@ services:
     build: .
     container_name: price-streamer
     environment:
-      REDIS_URL: redis://redis:6379
-      BINANCE_WS_BASE: wss://stream.binance.com:9443/ws
-      SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,adausdt
-      DATABASE_URL: postgresql+asyncpg://aiuser:ngocphat@timescaledb-ai:5432/aidb
-      PYTHONUNBUFFERED: "1"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      BINANCE_WS_BASE: ${BINANCE_WS_BASE:-wss://stream.binance.com:9443/ws}
+      SYMBOLS: ${SYMBOL:-btcusdt,ethusdt,bnbusdt,solusdt,adausdt}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_AI_USER:-aiuser}:${POSTGRES_AI_PASSWORD:-ngocphat}@timescaledb-ai:5432/${POSTGRES_AI_DB:-aidb}
+      PYTHONUNBUFFERED: ${PYTHONUNBUFFERED:-1}
     networks:
       - backend-network
     restart: unless-stopped
