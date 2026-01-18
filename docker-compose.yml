@@ -5,7 +5,8 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       BINANCE_WS_BASE: wss://stream.binance.com:9443/ws
-      SYMBOLS: btcusdt,ethusdt,solusdt,bnbusdt,adausdt
+      SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,adausdt
+      DATABASE_URL: postgresql+asyncpg://aiuser:ngocphat@timescaledb-ai:5432/aidb
       PYTHONUNBUFFERED: "1"
     networks:
       - backend-network

@@ -1,5 +1,8 @@
 websockets
 redis
+asyncpg
+sqlalchemy[asyncio]
 pydantic
 python-dotenv
 asyncio
+httpx
