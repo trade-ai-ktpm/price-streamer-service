@@ -3,7 +3,7 @@ Backfill missing candle data from Binance REST API
 """
 import asyncio
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from database import async_session
 from config import SYMBOLS
@@ -112,15 +112,24 @@ async def backfill_symbol(symbol: str, coin_id: int, max_gap_hours: int = 24 * 3
     # Get latest timestamp from DB
     latest_time = await get_latest_timestamp(coin_id)
     
+    # Work with timezone-naive datetimes for consistency
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    
     if latest_time is None:
         # No data exists, backfill from max_gap_hours ago
-        start_time = datetime.utcnow() - timedelta(hours=max_gap_hours)
-        print(f"  📭 No data found, backfilling from {start_time}", flush=True)
+        start_time = now - timedelta(hours=max_gap_hours)
+        print(f"  📭 No data found, backfilling {max_gap_hours} hours (~{max_gap_hours/24:.0f} days)", flush=True)
+        print(f"  📥 Backfilling from {start_time} to {now}...", flush=True)
     else:
-        start_time = latest_time + timedelta(minutes=1)  # Start from next minute
-        gap_minutes = int((datetime.utcnow() - start_time).total_seconds() / 60)
+        # Ensure latest_time is timezone-naive
+        if latest_time.tzinfo is not None:
+            latest_time = latest_time.replace(tzinfo=None)
         
-        if gap_minutes <= 1:
+        start_time = latest_time + timedelta(minutes=1)  # Start from next minute
+        gap_minutes = int((now - start_time).total_seconds() / 60)
+        
+        # Only skip if gap is less than 2 minutes (to handle current minute)
+        if gap_minutes < 2:
             print(f"  ✅ {symbol} is up to date (latest: {latest_time})", flush=True)
             return 0
         
@@ -129,7 +138,7 @@ async def backfill_symbol(symbol: str, coin_id: int, max_gap_hours: int = 24 * 3
     
     # Binance limit: 1000 candles per request
     # For 1m interval: 1000 minutes = ~16.6 hours per request
-    end_time = datetime.utcnow()
+    end_time = now
     current_start = start_time
     total_inserted = 0
     
@@ -190,13 +199,20 @@ async def backfill_all_symbols(coin_ids: dict, max_gap_hours: int = 24 * 30):
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     total = sum(r for r in results if isinstance(r, int))
-    errors = sum(1 for r in results if isinstance(r, Exception))
+    errors = []
+    
+    # Log any exceptions that occurred
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            symbol = list(coin_ids.keys())[i]
+            print(f"❌ Error backfilling {symbol}: {result}", flush=True)
+            errors.append(result)
     
     print("=" * 70, flush=True)
     print(f"✅ Backfill complete!", flush=True)
     print(f"   Total candles inserted: {total:,}", flush=True)
-    if errors > 0:
-        print(f"   ⚠️  Errors: {errors}", flush=True)
+    if errors:
+        print(f"   ⚠️  Errors: {len(errors)}", flush=True)
     print("=" * 70, flush=True)
     
     return total

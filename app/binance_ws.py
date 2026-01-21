@@ -14,6 +14,8 @@ from datetime import datetime
 import time
 from backfill import backfill_all_symbols
 from cleanup import cleanup_scheduler
+from aggregator import aggregate_candle
+from aggregate_refresher import aggregate_refresh_scheduler
 
 publisher = RedisPublisher()
 
@@ -26,16 +28,17 @@ async def load_coin_ids():
         result = await session.execute(text("SELECT id, symbol FROM coins"))
         for row in result:
             symbol = row.symbol
-            coin_ids[f"{symbol}USDT"] = row.id
+            coin_ids[symbol] = row.id
     print(f"Loaded {len(coin_ids)} coin IDs", flush=True)
 
 async def save_candle(symbol: str, timeframe: str, candle_data: dict):
-    """Save closed candle to database (only for 1m timeframe, others are aggregated)"""
+    """Save closed 1m candle to database"""
     if symbol not in coin_ids:
         print(f"Coin ID not found for {symbol}", flush=True)
         return
     
-    # Only save 1m candles to DB, other timeframes are aggregated by TimescaleDB
+    # Only save 1m candles to DB
+    # Other timeframes will be computed by aggregator and saved when complete
     if timeframe != "1m":
         return
     
@@ -47,17 +50,19 @@ async def save_candle(symbol: str, timeframe: str, candle_data: dict):
     
     async with async_session() as session:
         try:
+            query = text("""
+                INSERT INTO candle_data_1m (coin_id, timestamp, open, high, low, close, volume)
+                VALUES (:coin_id, :timestamp, :open, :high, :low, :close, :volume)
+                ON CONFLICT (coin_id, timestamp) DO UPDATE
+                SET open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume
+            """)
+            
             await session.execute(
-                text("""
-                    INSERT INTO candle_data_1m (coin_id, timestamp, open, high, low, close, volume)
-                    VALUES (:coin_id, :timestamp, :open, :high, :low, :close, :volume)
-                    ON CONFLICT (coin_id, timestamp) DO UPDATE
-                    SET open = EXCLUDED.open,
-                        high = EXCLUDED.high,
-                        low = EXCLUDED.low,
-                        close = EXCLUDED.close,
-                        volume = EXCLUDED.volume
-                """),
+                query,
                 {
                     "coin_id": coin_id,
                     "timestamp": timestamp,
@@ -106,6 +111,9 @@ async def handle_message(message: str):
     """Handle incoming Binance WebSocket message"""
     data = json.loads(message)
     
+    # DEBUG: Log message receipt
+    print(f"📨 Received message from Binance", flush=True)
+    
     # Combined stream payload has 'data' wrapper
     if 'data' in data:
         data = data['data']
@@ -120,16 +128,37 @@ async def handle_message(message: str):
     timestamp = int(time.time() * 1000)
     is_closed = kline['x']  # True if candle is closed
     
-    # Always publish candle update for realtime chart
+    # DEBUG
+    print(f"[Binance WS] {symbol} {timeframe} is_closed={is_closed}", flush=True)
+    
+    # Publish candle update for this timeframe (Aggregator handles higher timeframes)
+    # Frontend needs these to detect candle close events
     await publish_candle_update(symbol, timeframe, kline, is_closed)
+    print(f"[Binance WS] Published candle:{symbol}:{timeframe}", flush=True)
     
     # Publish price update (only for 1m to avoid duplicates)
     if timeframe == "1m":
         await publish_price_update(symbol, price, timestamp)
+        print(f"[Binance WS] Published price:{symbol}", flush=True)
     
-    # Save to database when 1m candle closes
-    if is_closed and timeframe == "1m":
-        await save_candle(symbol, timeframe, data)
+    # For 1m candles: save to DB and aggregate to higher timeframes
+    if timeframe == "1m":
+        if is_closed:
+            await save_candle(symbol, timeframe, data)
+        
+        # Aggregate to 5m/15m/1h/4h/1d/1w
+        # DISABLED: Using TimescaleDB continuous aggregates instead
+        # Real-time aggregation was causing incorrect data
+        candle_1m = {
+            "timestamp": kline['t'],
+            "open": float(kline['o']),
+            "high": float(kline['h']),
+            "low": float(kline['l']),
+            "close": float(kline['c']),
+            "volume": float(kline['v']),
+            "is_closed": is_closed
+        }
+        await aggregate_candle(symbol, candle_1m)
 
 async def stream_all_symbols():
     """
@@ -137,17 +166,17 @@ async def stream_all_symbols():
     Binance allows up to 1024 streams per connection.
     We have 5 symbols x 7 timeframes = 35 streams.
     """
-    # Build stream list: {symbol}@kline_{timeframe}
+    # Build stream list: ONLY subscribe 1m candles
+    # Aggregator will create 5m, 15m, 1h, 4h, 1d, 1w from 1m data
     streams = []
     for symbol in SYMBOLS:
-        for tf in TIMEFRAMES:
-            stream_name = f"{symbol}@kline_{tf}"
-            streams.append(stream_name)
+        stream_name = f"{symbol}@kline_1m"
+        streams.append(stream_name)
     
     total_streams = len(streams)
-    print(f"Subscribing to {total_streams} streams (5 coins x 7 timeframes)", flush=True)
+    print(f"Subscribing to {total_streams} streams (5 coins x 1m only)", flush=True)
     print(f"Symbols: {[s.upper() for s in SYMBOLS]}", flush=True)
-    print(f"Timeframes: {TIMEFRAMES}", flush=True)
+    print(f"Aggregator will create: 5m, 15m, 1h, 4h, 1d, 1w", flush=True)
     
     # Use combined stream endpoint (single connection for all streams)
     url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
@@ -190,6 +219,9 @@ async def start():
         )
     else:
         print("⚠️  Data cleanup is DISABLED", flush=True)
+    
+    # Start aggregate refresh scheduler in background (every 5 minutes)
+    asyncio.create_task(aggregate_refresh_scheduler(interval_minutes=5))
     
     # Start streaming (single connection for all)
     await stream_all_symbols()

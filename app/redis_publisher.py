@@ -1,6 +1,6 @@
 import json
 import redis.asyncio as redis
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
 
 class RedisPublisher:
 
@@ -9,6 +9,7 @@ class RedisPublisher:
             host=REDIS_HOST,
             port=REDIS_PORT,
             db=REDIS_DB,
+            password=REDIS_PASSWORD,
             decode_responses=True
         )
 
