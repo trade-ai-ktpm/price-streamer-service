@@ -39,8 +39,14 @@ def get_candle_start_time(timestamp_ms: int, interval_minutes: int) -> int:
     timestamp_seconds = timestamp_ms // 1000
     interval_seconds = interval_minutes * 60
     
-    # Round down to the start of the interval
-    candle_start = (timestamp_seconds // interval_seconds) * interval_seconds
+    # Special handling for 1w (10080 minutes) to align with Monday (Binance standard)
+    # Unix Epoch (1970-01-01) is Thursday. Monday is +4 days (345600 seconds).
+    if interval_minutes == 10080:  # 1w
+        offset = 345600  # 4 days in seconds
+        candle_start = ((timestamp_seconds - offset) // interval_seconds) * interval_seconds + offset
+    else:
+        # Round down to the start of the interval
+        candle_start = (timestamp_seconds // interval_seconds) * interval_seconds
     
     return candle_start * 1000
 
@@ -155,7 +161,7 @@ async def aggregate_candle(symbol: str, candle_1m: dict):
             await publisher.publish_price(channel, candle_update)
             
             # Log for debugging
-            if symbol == "BTCUSDT" and tf in ["5m", "15m", "1h"]:
+            if symbol == "BTCUSDT" and tf in ["5m", "15m", "1h", "1w"]:
                 print(f"📊 {symbol} {tf}: {candle_count+1}/{interval_minutes} candles, "
                       f"O={open_price:.2f}, H={high:.2f}, L={low:.2f}, C={close:.2f}, "
                       f"V={volume:.2f}, closed={should_close}", flush=True)
